@@ -109,7 +109,7 @@ def socket_server(shared_mem, mutex, fmt):
             )
             t.start()
 
-
+'''
 def handle_client(client_socket, address, shared_mem, mutex, fmt):
     with client_socket:
         print("[env] handling client:", address)
@@ -148,7 +148,7 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt):
 
         print("[env] client disconnected:", address)
 
-
+'''
 
 '''
 code proposé par chat 
@@ -157,7 +157,7 @@ et de traiter plusieurs commandes successives envoyées par le même client,
 au lieu de fermer la connexion après une seule requête.
 '''
 
-'''
+
 
 def handle_client(client_socket, address, shared_mem, mutex, fmt):
     print("[env] handling client:", address)
@@ -237,7 +237,7 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt):
                     client_socket.sendall(b"ERR bad request\n")
                     print("[env] unknown command:", msg)
 
-'''
+
 
 def mq_listener(mq):
     while True:
