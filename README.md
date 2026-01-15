@@ -20,6 +20,9 @@ Attention : le programme utilise sysv_ipc pour la message_queue et le shared_mem
 création d'un socket sur lequel preys et predators pourront se connecter, il y a une fonction qui lance des threads pour chaque nouvelle connexion à gérer pour que cela ne soit pas bloquant pour le code principal.
 création de la message queue avec display dans env, il y a comme pour le socket un fonction qui est lancée sur un thread et qui lit en permanence ce qui se passe dans la message queue.
 
+L’architecture repose sur des agents autonomes (proies/prédateurs) implémentés comme des processus indépendants.
+Chaque agent établit une connexion TCP persistante avec le processus env, qui valide les actions (reproduction, alimentation, mort) et maintient l’état global via une mémoire partagée protégée par sémaphore.
+
 ## Tâches à faire:
 On pourra faire des test en connectant un client au serveur de env et voir si en mettant des JOIN cela incrémente bien les compteurs de population
 Réfléchir au fonctionnement de nos preys et prédators : energy, reproduction, death, passive,active
