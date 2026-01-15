@@ -148,6 +148,97 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt):
 
         print("[env] client disconnected:", address)
 
+
+
+'''
+code proposé par chat 
+Cette version de handle_client permet de garder une connexion socket ouverte 
+et de traiter plusieurs commandes successives envoyées par le même client,
+au lieu de fermer la connexion après une seule requête.
+'''
+
+'''
+
+def handle_client(client_socket, address, shared_mem, mutex, fmt):
+    print("[env] handling client:", address)
+
+    buffer = b""
+    with client_socket:
+        while True:
+            chunk = client_socket.recv(1024)
+            if not chunk:
+                print("[env] client disconnected:", address)
+                break
+
+            buffer += chunk
+
+            # Tant qu'on a au moins une ligne complète (terminée par \n)
+            while b"\n" in buffer:
+                line, buffer = buffer.split(b"\n", 1)
+                msg = line.decode().strip()
+
+                if not msg:
+                    continue
+
+                parts = msg.split()
+
+                # -------------------------
+                # Commande JOIN
+                # -------------------------
+                if len(parts) == 2 and parts[0] == "JOIN":
+                    kind = parts[1]  # "prey" ou "predator"
+
+                    mutex.acquire()
+                    try:
+                        state = list(fmt.unpack(shared_mem.buf[:fmt.size]))
+
+                        if kind == "prey":
+                            state[PREY] += 1
+                        elif kind == "predator":
+                            state[PRED] += 1
+                        else:
+                            client_socket.sendall(b"ERR unknown kind\n")
+                            continue
+
+                        shared_mem.buf[:fmt.size] = fmt.pack(*state)
+                    finally:
+                        mutex.release()
+
+                    client_socket.sendall(b"OK\n")
+                    print("[env] JOIN accepted:", kind, "-> state =", state)
+
+                # -------------------------
+                # Commande DIE (ex: "DIE prey prey-123")
+                # Pour l'instant: décrémente juste le compteur
+                # -------------------------
+                elif len(parts) >= 2 and parts[0] == "DIE":
+                    kind = parts[1]  # "prey" ou "predator"
+
+                    mutex.acquire()
+                    try:
+                        state = list(fmt.unpack(shared_mem.buf[:fmt.size]))
+
+                        if kind == "prey":
+                            state[PREY] = max(0, state[PREY] - 1)
+                        elif kind == "predator":
+                            state[PRED] = max(0, state[PRED] - 1)
+                        else:
+                            client_socket.sendall(b"ERR unknown kind\n")
+                            continue
+
+                        shared_mem.buf[:fmt.size] = fmt.pack(*state)
+                    finally:
+                        mutex.release()
+
+                    client_socket.sendall(b"OK\n")
+                    print("[env] DIE accepted:", kind, "-> state =", state)
+
+                else:
+                    client_socket.sendall(b"ERR bad request\n")
+                    print("[env] unknown command:", msg)
+
+'''
+
 def mq_listener(mq):
     while True:
             msg, mtype = mq.receive()   # bloque jusqu'à recevoir un message
