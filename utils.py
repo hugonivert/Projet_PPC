@@ -1,5 +1,9 @@
-
+# utils.py
 import socket
+import sysv_ipc
+import queue
+import time
+
 
 def recv_line(sock: socket.socket, buffer: bytearray) -> str | None:
     """
@@ -32,3 +36,24 @@ def send_cmd_persistent(sock: socket.socket, buffer: bytearray, cmd: str) -> str
     if resp is None:
         raise ConnectionError("env closed the connection unexpectedly")
     return resp
+
+
+def mq_listener(mq: sysv_ipc.MessageQueue, ntype: int, inbox: queue.Queue):
+    """
+    Thread listener MQ:
+    - bloque sur mq.receive(type=ntype)
+    - décode le message
+    - push dans inbox (Queue thread-safe) pour que le main thread traite
+    """
+    while True:
+        try:
+            msg, mtype = mq.receive(type=ntype)  # IMPORTANT: retourne (bytes, type)
+            text = msg.decode("utf-8", errors="replace").strip()
+            inbox.put(text)
+            print("[env] MQ received:", text)
+        except sysv_ipc.ExistentialError:
+            print("[env] MQ removed, listener stops")
+            break
+        except Exception as e:
+            print("[env] MQ listener error:", e)
+            time.sleep(0.1)
