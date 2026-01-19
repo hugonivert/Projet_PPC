@@ -63,7 +63,7 @@ def main():
 
             # D) si faim : tenter de manger
             if energy < HUNGER_THRESHOLD:
-                resp = utils.send_cmd_persistent(s, buffer, f"EAT_GRASS {pred_id}")
+                resp = utils.send_cmd_persistent(s, buffer, f"EAT_PREY {pred_id}")
                 if resp == "OK":
                     energy += EAT_GAIN
                     print(f"[pred {pred_id}] ate prey (+{EAT_GAIN}) -> energy={energy}")

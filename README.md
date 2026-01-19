@@ -23,9 +23,8 @@ création de la message queue avec display dans env, il y a comme pour le socket
 16/01 Léo/Hugo : création de prey et predator : L’architecture repose sur des agents autonomes (proies/prédateurs) implémentés comme des processus indépendants.
 Chaque agent établit une connexion TCP persistante avec le processus env, qui valide les actions (reproduction, alimentation, mort) et maintient l’état global via une mémoire partagée protégée par sémaphore.
 
-19/01 Léo: début implémentation display, réponse à notre question sur la double message queue env-display : on peut choisir un type (ex: type = 1 ou type = 2) lorsqu'on envoie une message et trier en fonction de ça à la réception donc pas de pb
-Pour display, plusieurs types de messages : à voir
-Implémentation d'une attente d'un premier message init reçu de display par env pour que le joueur puisse choisir lui même les conditions initiales. Ensuite lancement d'un thread qui lit en permance les messages qui arrivent de display. Il faudra faire pareil pour display, il devra lire tous les évènements qui arrivent de env et mettre a jour ses données et afficher à l'écrans les events.
+19/01 Léo: réponse à notre question sur la double message queue env-display : on peut choisir un type (ex: type = 1 ou type = 2) lorsqu'on envoie une message et trier en fonction de ça à la réception donc pas de pb
+Récapitulatif journée: On peut maintenant rentrer dans display les populations initiales, env attend de recevoir les populations initiales pour lancer la simulation. Une fois la simulation lancée, env envoie tous les évènements qui se passent à display qui les affichent au joueur (Types de messages envoyées de env->display: Predator eats Prey, Prey eats Grass, Grass grows, Predator reproduces, Prey reproduces, Prey dies, Predator dies, Drought). env et display mettent tous les deux à jour les compteurs de population en fonction de ce qui se passe.
 
 ## Tâches à faire:
 On pourra faire des test en connectant un client au serveur de env et voir si en mettant des JOIN cela incrémente bien les compteurs de population
