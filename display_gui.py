@@ -14,6 +14,8 @@ from tkinter import ttk, messagebox
 import subprocess
 import sys
 import os
+import socket
+import signal
 
 import sysv_ipc
 
@@ -136,10 +138,17 @@ class DisplayGUI:
         self.refresh_labels()
 
         if self.env_proc is None or self.env_proc.poll() is not None:
+            if self.is_port_in_use("localhost", 6666):
+                messagebox.showerror(
+                    "Error",
+                    "Le port 6666 est deja utilise. Arrete l'ancien env.py puis relance.",
+                )
+                return
             self.env_proc = subprocess.Popen(
                 [sys.executable, "env.py"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=None,
+                stderr=None,
+                start_new_session=True,
             )
 
         self.send_cmd(f"INIT {predators} {preys} {grass}")
@@ -158,6 +167,15 @@ class DisplayGUI:
         self.prey_lbl.config(text=f"Preys: {self.state['preys']}")
         self.grass_lbl.config(text=f"Grass: {self.state['grass']}")
         self.drought_lbl.config(text=f"Drought: {'ON' if self.state['drought'] else 'OFF'}")
+
+    @staticmethod
+    def is_port_in_use(host: str, port: int) -> bool:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.2)
+                return s.connect_ex((host, port)) == 0
+        except Exception:
+            return False
 
     def log_event(self, text: str) -> None:
         self.log.config(state="normal")
@@ -222,15 +240,27 @@ class DisplayGUI:
         except Exception:
             pass
         if self.env_proc is not None and self.env_proc.poll() is None:
-            self.env_proc.terminate()
+            try:
+                self.env_proc.wait(timeout=2)
+            except Exception:
+                try:
+                    os.killpg(self.env_proc.pid, signal.SIGTERM)
+                except Exception:
+                    pass
+                try:
+                    self.env_proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        os.killpg(self.env_proc.pid, signal.SIGKILL)
+                    except Exception:
+                        pass
         self.started = False
         self.drought_btn.config(state="disabled")
         self.stop_btn.config(state="disabled")
 
     def on_close(self) -> None:
         try:
-            if self.env_proc is not None and self.env_proc.poll() is None:
-                self.env_proc.terminate()
+            self.on_stop()
         finally:
             self.root.destroy()
 

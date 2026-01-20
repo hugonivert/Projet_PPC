@@ -17,7 +17,7 @@ ENERGY_DECAY = 1
 HUNGER_THRESHOLD = 15     # si energy < 10 => proie cherche à manger
 EAT_GAIN = 10              # énergie gagnée si herbe mangée
 
-REPRO_THRESHOLD = 20      # si energy > 25 => proie peut tenter reproduction
+REPRO_THRESHOLD = 21      # si energy > 25 => proie peut tenter reproduction
 REPRO_PROB = 0.6         # 30% de chance par tick au-dessus du seuil
 
 def main():

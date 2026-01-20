@@ -14,11 +14,11 @@ TICK_SECONDS = 3
 ENERGY_START = 30
 ENERGY_DECAY = 1
 
-HUNGER_THRESHOLD = 15     # si energy < 10 => predateur cherche à manger
+HUNGER_THRESHOLD = 25     # si energy < 10 => predateur cherche à manger
 EAT_GAIN = 10              # énergie gagnée si proie mangée
 
-REPRO_THRESHOLD = 35     # si energy > 25 => predateur peut tenter reproduction
-REPRO_PROB = 0.30         # 30% de chance par tick au-dessus du seuil
+REPRO_THRESHOLD = 30     # si energy > 25 => predateur peut tenter reproduction
+REPRO_PROB = 1         # 30% de chance par tick au-dessus du seuil
 
 
 def main():
