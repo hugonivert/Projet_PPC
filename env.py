@@ -549,37 +549,42 @@ def main():
 
             time.sleep(1)
 
-            # tick + herbe
-            st = read_state(shared_mem, mutex)
-            st[TICK] += 1
+            # tick + herbe (mise a jour atomique pour eviter les pertes)
+            mutex.acquire()
+            try:
+                st = list(FMT.unpack(shared_mem.buf[:FMT.size]))
+                st[TICK] += 1
 
-            # fin automatique de secheresse
+                if st[DROUGHT] == 0:
+                    grow = random.randint(5, 10)
+                else:
+                    grow = -random.randint(3, 5)
+
+                if grow >= 0:
+                    st[GRASS] += grow
+                    delta_txt = f"(grass +{grow})"
+                    loss = 0
+                else:
+                    loss = min(-grow, st[GRASS])
+                    st[GRASS] -= loss
+                    delta_txt = f"(grass -{loss})"
+                    grow = 0
+
+                shared_mem.buf[:FMT.size] = FMT.pack(
+                    st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK]
+                )
+            finally:
+                mutex.release()
+
+            # fin automatique de secheresse (apres mise a jour tick)
             if st[DROUGHT] == 1 and drought.drought_until_tick is not None and st[TICK] >= drought.drought_until_tick:
                 set_drought_env(shared_mem, mutex, mq, st, False, "timeout")
 
-            if st[DROUGHT] == 0:
-                grow = random.randint(5, 10)
-            else:
-                grow = -random.randint(3, 5)
-
-            
-            if grow >= 0:
-                st[GRASS] += grow
-                apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
-
-                # On envoie "Grass grows" grow fois pour que display incrémente +1 par event.
-                for _ in range(grow):
-                    send_evt(mq, EV_GRASS_GROWS)
-                delta_txt = f"(grass +{grow})"
-            else:
-                loss = min(-grow, st[GRASS])
-                st[GRASS] -= loss
-                apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
-
-                # On envoie "Grass withers" loss fois pour que display décrémente.
-                for _ in range(loss):
-                    send_evt(mq, EV_GRASS_WITHERS)
-                delta_txt = f"(grass -{loss})"
+            # On envoie les events d'herbe apres la mise a jour SHM.
+            for _ in range(grow):
+                send_evt(mq, EV_GRASS_GROWS)
+            for _ in range(loss):
+                send_evt(mq, EV_GRASS_WITHERS)
 
             print("[env] state =", st, delta_txt)
 
