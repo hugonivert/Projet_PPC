@@ -3,6 +3,16 @@ import socket
 import sysv_ipc
 import queue
 import time
+from multiprocessing import shared_memory
+import struct
+
+# Shared world definitions (must match env.py)
+SHM_NAME = "WORLD"
+SEMA_KEY = 0x1234
+FMT = struct.Struct("iiiii")  # pred, prey, grass, drought, tick
+
+# indices
+PRED, PREY, GRASS, DROUGHT, TICK = 0, 1, 2, 3, 4
 
 
 def recv_line(sock: socket.socket, buffer: bytearray) -> str | None:
@@ -57,3 +67,30 @@ def mq_listener(mq: sysv_ipc.MessageQueue, ntype: int, inbox: queue.Queue):
         except Exception as e:
             print("[env] MQ listener error:", e)
             time.sleep(0.1)
+
+
+def attach_world(retries: int = 50, delay: float = 0.1):
+    """
+    Attache la SHM + sAcmaphore de l'env (WORLD). Retry pour laisser le temps Aÿ env.
+    """
+    last_err: Exception | None = None
+    for _ in range(retries):
+        try:
+            mutex = sysv_ipc.Semaphore(SEMA_KEY)
+            shared_mem = shared_memory.SharedMemory(name=SHM_NAME, create=False)
+            return shared_mem, mutex
+        except Exception as e:
+            last_err = e
+            time.sleep(delay)
+    raise RuntimeError(f"Unable to attach world SHM: {last_err}")
+
+
+def read_state(shared_mem, mutex) -> list[int]:
+    """
+    Lit l'Actat global (5 entiers) depuis la mAcmoire partagAce (SHM), de faAon atomique.
+    """
+    mutex.acquire()
+    try:
+        return list(FMT.unpack(shared_mem.buf[:FMT.size]))
+    finally:
+        mutex.release()

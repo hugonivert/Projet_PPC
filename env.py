@@ -331,15 +331,7 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
 
                 if len(parts) == 2 and parts[0] == "JOIN":
                     kind = parts[1]
-                    st = read_state(shared_mem, mutex)
-
-                    if kind == "prey":
-                        st[PREY] += 1
-                        apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
-                        client_socket.sendall(b"OK\n")
-                    elif kind == "predator":
-                        st[PRED] += 1
-                        apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
+                    if kind in ("prey", "predator"):
                         client_socket.sendall(b"OK\n")
                     else:
                         client_socket.sendall(b"ERR unknown kind\n")

@@ -8,14 +8,14 @@ HOST = "localhost"
 PORT = 6666
 
 # Simulation
-TICK_SECONDS = 1.0
+TICK_SECONDS = 3
 
 # "Biologie" de la proie
 ENERGY_START = 20
 ENERGY_DECAY = 1
 
 HUNGER_THRESHOLD = 10     # si energy < 10 => proie cherche à manger
-EAT_GAIN = 8              # énergie gagnée si herbe mangée
+EAT_GAIN = 6              # énergie gagnée si herbe mangée
 
 REPRO_THRESHOLD = 25      # si energy > 25 => proie peut tenter reproduction
 REPRO_PROB = 0.30         # 30% de chance par tick au-dessus du seuil
@@ -26,6 +26,8 @@ def main():
 
     energy = ENERGY_START
     tick = 0
+    shared_mem = None
+    mutex = None
 
     # Connexion persistante : 1 socket pour toute la vie de la proie
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -40,6 +42,13 @@ def main():
             return
         print(f"[prey {prey_id}] JOIN OK")
 
+        # 1bis) attacher la SHM pour lire l'Actat global
+        try:
+            shared_mem, mutex = utils.attach_world()
+        except Exception as e:
+            print(f"[prey {prey_id}] SHM attach failed -> {e}")
+            return
+
         # 2) Boucle de vie
         while True:
             tick += 1
@@ -49,7 +58,7 @@ def main():
             energy -= ENERGY_DECAY
 
             # B) log
-            print(f"[prey {prey_id}] tick={tick} energy={energy}")
+            #print(f"[prey {prey_id}] tick={tick} energy={energy}")
 
             # C) mort : prévenir env + quitter
             if energy < 0:
@@ -62,17 +71,25 @@ def main():
 
             # D) si faim : tenter de manger
             if energy < HUNGER_THRESHOLD:
-                resp = utils.send_cmd_persistent(s, buffer, f"EAT_GRASS {prey_id}")
-                if resp == "OK":
-                    energy += EAT_GAIN
-                    print(f"[prey {prey_id}] ate grass (+{EAT_GAIN}) -> energy={energy}")
-                else:
-                    print(f"[prey {prey_id}] could not eat grass -> {resp}")
+                st = utils.read_state(shared_mem, mutex)
+                if st[utils.GRASS] > 0:
+                    resp = utils.send_cmd_persistent(s, buffer, f"EAT_GRASS {prey_id}")
+                    if resp == "OK":
+                        energy += EAT_GAIN
+                        print(f"[prey {prey_id}] ate grass (+{EAT_GAIN}) -> energy={energy}")
+                    else:
+                        print(f"[prey {prey_id}] could not eat grass -> {resp}")
 
             # E) reproduction (optionnel)
             if energy > REPRO_THRESHOLD and random.random() < REPRO_PROB:
                 resp = utils.send_cmd_persistent(s, buffer, f"REPRODUCE prey {prey_id}")
                 print(f"[prey {prey_id}] reproduce attempt -> {resp}")
+
+    if shared_mem is not None:
+        try:
+            shared_mem.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
