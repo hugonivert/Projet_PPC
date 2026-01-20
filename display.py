@@ -3,6 +3,7 @@ import sysv_ipc
 import threading
 import queue
 import time
+import sys
 
 MQ_KEY = 0x5678
 
@@ -84,6 +85,19 @@ def send_init(mq: sysv_ipc.MessageQueue, predators: int, preys: int, grass: int)
     print("[display] Sent:", cmd)
 
 
+def send_cmd(mq: sysv_ipc.MessageQueue, cmd: str) -> None:
+    mq.send(cmd.encode("utf-8"), type=TYPE_CMD)
+
+
+def input_listener(cmd_inbox: queue.Queue):
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            time.sleep(0.1)
+            continue
+        cmd_inbox.put(line.strip())
+
+
 def handle_message(text: str):
     """
     Traite un événement reçu depuis env et met à jour l’état local + affiche un message joueur.
@@ -98,6 +112,7 @@ def handle_message(text: str):
         - "Predator eats Prey"      : une proie disparaît (-1 prey)
         - "Prey eats Grass"         : une herbe disparaît (-1 grass)
         - "Grass grows"             : une herbe apparaît (+1 grass)
+        - "Grass withers"           : une herbe disparait (-1 grass)
         - "Predator reproduces"     : +1 predator
         - "Prey reproduces"         : +1 prey
         - "Prey dies"               : -1 prey
@@ -128,6 +143,11 @@ def handle_message(text: str):
     elif text == "Grass grows":
         state["grass"] += 1
         print("[display] 🌱 L’herbe pousse (+1 herbe).")
+
+    elif text == "Grass withers":
+        if state["grass"] > 0:
+            state["grass"] -= 1
+        print("[display] L'herbe fane (-1 herbe).")
 
     elif text == "Predator reproduces":
         state["predators"] += 1
@@ -190,15 +210,31 @@ def main():
     inbox = queue.Queue()
     threading.Thread(target=mq_listener, args=(mq, TYPE_EVT, inbox), daemon=True).start()
 
+    cmd_inbox = queue.Queue()
+    threading.Thread(target=input_listener, args=(cmd_inbox,), daemon=True).start()
+
     print("[display] Listening for events...")
+    print("[display] Type 'd' + Enter to toggle drought.")
     print_state()
 
     while True:
         try:
             text = inbox.get(timeout=0.5)
         except queue.Empty:
-            continue
-        handle_message(text)
+            text = None
+
+        if text:
+            handle_message(text)
+
+        while True:
+            try:
+                cmd = cmd_inbox.get_nowait()
+            except queue.Empty:
+                break
+
+            if cmd.lower() == "d":
+                desired = 0 if state["drought"] else 1
+                send_cmd(mq, f"SET DROUGHT {desired}")
 
 
 if __name__ == "__main__":

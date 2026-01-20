@@ -7,10 +7,12 @@ import threading
 import time
 import queue
 import random
+import signal
 
 import utils
 import prey
 import predator
+import drought
 
 # constantes
 SHM_NAME = "WORLD"
@@ -33,6 +35,7 @@ EV_PREY_REPRO      = "Prey reproduces"
 EV_PREY_DIES       = "Prey dies"
 EV_PRED_DIES       = "Predator dies"
 EV_DROUGHT         = "Drought"
+EV_GRASS_WITHERS   = "Grass withers"
 
 
 def send_evt(mq: sysv_ipc.MessageQueue, text: str) -> None:
@@ -49,6 +52,25 @@ def send_evt(mq: sysv_ipc.MessageQueue, text: str) -> None:
         - La réception côté display consomme le message (receive()).
     """
     mq.send(text.encode("utf-8"), type=TYPE_EVT)
+
+
+def set_drought_env(shared_mem, mutex, mq, st: list[int], on: bool, reason: str) -> None:
+    drought.set_drought(
+        shared_mem,
+        mutex,
+        mq,
+        st,
+        on,
+        reason,
+        apply_state=apply_state,
+        send_evt=send_evt,
+        ev_drought=EV_DROUGHT,
+        idx_pred=PRED,
+        idx_prey=PREY,
+        idx_grass=GRASS,
+        idx_drought=DROUGHT,
+        idx_tick=TICK,
+    )
 
 
 def apply_state(shared_mem, mutex, pred: int, prey_n: int, grass: int, drought: int, tick: int) -> None:
@@ -180,10 +202,9 @@ def handle_cmd(cmd: str, shared_mem, mutex, mq) -> bool:
             apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
             send_evt(mq, f"ACK_SET GRASS {st[GRASS]}")
         elif field == "DROUGHT":
-            st[DROUGHT] = 1 if val != 0 else 0
-            apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
+            desired = 1 if val != 0 else 0
+            set_drought_env(shared_mem, mutex, mq, st, desired == 1, "manual")
             send_evt(mq, f"ACK_SET DROUGHT {st[DROUGHT]}")
-            send_evt(mq, EV_DROUGHT)
         else:
             send_evt(mq, "ERR unknown SET field")
         return True
@@ -425,6 +446,7 @@ def main():
            - faire pousser l’herbe aléatoirement selon drought et notifier display via EV_GRASS_GROWS
         8) Cleanup: terminate agents, unlink SHM, remove semaphore, remove MQ.
     """
+    # drought flags live in drought.py
     # mutex
     try:
         mutex = sysv_ipc.Semaphore(SEMA_KEY, sysv_ipc.IPC_CREX, initial_value=1)
@@ -459,6 +481,12 @@ def main():
     # 3) ACK
     send_evt(mq, "ACK_INIT")
 
+    # signal handler for drought toggling
+    signal.signal(signal.SIGUSR1, drought.on_drought_signal)
+
+    # schedule random droughts via timer
+    drought.schedule_drought_timer()
+
     # 4) listener MQ runtime (display -> env)
     inbox = queue.Queue()
     mq_thread = threading.Thread(target=utils.mq_listener, args=(mq, TYPE_CMD, inbox), daemon=True)
@@ -488,29 +516,59 @@ def main():
                 if not running:
                     break
 
+            # signal toggle request
+            if drought.toggle_drought_requested:
+                st = read_state(shared_mem, mutex)
+                set_drought_env(shared_mem, mutex, mq, st, st[DROUGHT] == 0, "signal")
+                drought.toggle_drought_requested = False
+
+            # random drought request (timer-based)
+            if drought.random_drought_requested:
+                st = read_state(shared_mem, mutex)
+                if st[DROUGHT] == 0:
+                    set_drought_env(shared_mem, mutex, mq, st, True, "random")
+                drought.random_drought_requested = False
+
             time.sleep(1)
 
             # tick + herbe
             st = read_state(shared_mem, mutex)
             st[TICK] += 1
 
+            # fin automatique de secheresse
+            if st[DROUGHT] == 1 and drought.drought_until_tick is not None and st[TICK] >= drought.drought_until_tick:
+                set_drought_env(shared_mem, mutex, mq, st, False, "timeout")
+
             if st[DROUGHT] == 0:
                 grow = random.randint(5, 10)
             else:
-                grow = random.randint(0, 2)
+                grow = -random.randint(3, 5)
 
-            st[GRASS] += grow
-            apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
+            
+            if grow >= 0:
+                st[GRASS] += grow
+                apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
 
-            # On envoie "Grass grows" grow fois pour que display incrémente +1 par event.
-            for _ in range(grow):
-                send_evt(mq, EV_GRASS_GROWS)
+                # On envoie "Grass grows" grow fois pour que display incrémente +1 par event.
+                for _ in range(grow):
+                    send_evt(mq, EV_GRASS_GROWS)
+                delta_txt = f"(grass +{grow})"
+            else:
+                loss = min(-grow, st[GRASS])
+                st[GRASS] -= loss
+                apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
 
-            print("[env] state =", st, f"(grass +{grow})")
+                # On envoie "Grass withers" loss fois pour que display décrémente.
+                for _ in range(loss):
+                    send_evt(mq, EV_GRASS_WITHERS)
+                delta_txt = f"(grass -{loss})"
+
+            print("[env] state =", st, delta_txt)
 
     except KeyboardInterrupt:
         print("[env] shutting down (Ctrl+C)")
     finally:
+        drought.cancel_drought_timer()
         # cleanup
         for p in procs:
             try:
