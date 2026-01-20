@@ -229,6 +229,8 @@ class DisplayGUI:
                 self.log_event("La secheresse commence.")
             else:
                 self.log_event("La secheresse s'arrete.")
+        elif text == "Prey escapes":
+            self.log_event("La proie a fait break le prédateur, PICORE MAINTENANT")
 
         self.refresh_labels()
 

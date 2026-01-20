@@ -36,6 +36,8 @@ EV_PREY_DIES       = "Prey dies"
 EV_PRED_DIES       = "Predator dies"
 EV_DROUGHT         = "Drought"
 EV_GRASS_WITHERS   = "Grass withers"
+PREY_ESCAPE_PROB   = 0.35
+EV_PREY_ESCAPES    = "Prey escapes"
 
 
 def send_evt(mq: sysv_ipc.MessageQueue, text: str) -> None:
@@ -217,7 +219,7 @@ def handle_cmd(cmd: str, shared_mem, mutex, mq) -> bool:
     return True
 
 
-def spawn_prey(procs: list[Process]) -> None:
+def spawn_prey(procs: list[Process], prey_procs: list[Process]) -> None:
     """
     Crée et démarre un nouveau processus proie (prey) et l’ajoute à la liste procs.
 
@@ -233,9 +235,10 @@ def spawn_prey(procs: list[Process]) -> None:
     p = Process(target=prey.main)
     p.start()
     procs.append(p)
+    prey_procs.append(p)
 
 
-def spawn_predator(procs: list[Process]) -> None:
+def spawn_predator(procs: list[Process], pred_procs: list[Process]) -> None:
     """
     Crée et démarre un nouveau processus prédateur (predator) et l’ajoute à procs.
 
@@ -251,9 +254,10 @@ def spawn_predator(procs: list[Process]) -> None:
     p = Process(target=predator.main)
     p.start()
     procs.append(p)
+    pred_procs.append(p)
 
 
-def spawn_population(n_pred: int, n_prey: int) -> list[Process]:
+def spawn_population(n_pred: int, n_prey: int, procs: list[Process], prey_procs: list[Process], pred_procs: list[Process]) -> None:
     """
     Lance la population initiale (n_prey proies + n_pred prédateurs).
 
@@ -266,15 +270,13 @@ def spawn_population(n_pred: int, n_prey: int) -> list[Process]:
         - Pour chaque prédateur : spawn_predator()
         - Retourne la liste complète des Process pour gestion/cleanup
     """
-    procs: list[Process] = []
     for _ in range(n_prey):
-        spawn_prey(procs)
+        spawn_prey(procs, prey_procs)
     for _ in range(n_pred):
-        spawn_predator(procs)
-    return procs
+        spawn_predator(procs, pred_procs)
 
 
-def socket_server(shared_mem, mutex, fmt, mq, procs: list[Process]):
+def socket_server(shared_mem, mutex, fmt, mq, procs: list[Process], prey_procs: list[Process], pred_procs: list[Process]):
     """
     Serveur TCP dans env : point d’entrée des événements envoyés par les processus prey/predator.
 
@@ -302,13 +304,13 @@ def socket_server(shared_mem, mutex, fmt, mq, procs: list[Process]):
             print("[env] Connected:", address)
             t = threading.Thread(
                 target=handle_client,
-                args=(client_socket, address, shared_mem, mutex, fmt, mq, procs),
+                args=(client_socket, address, shared_mem, mutex, fmt, mq, procs, prey_procs, pred_procs),
                 daemon=True
             )
             t.start()
 
 
-def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: list[Process]):
+def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: list[Process], prey_procs: list[Process], pred_procs: list[Process]):
     """
     Gère une connexion TCP persistante provenant d’un agent (prey ou predator).
 
@@ -382,10 +384,24 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                     st = read_state(shared_mem, mutex)
 
                     if st[PREY] > 0:
-                        st[PREY] -= 1
-                        apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
-                        send_evt(mq, EV_PRED_EATS_PREY)
-                        client_socket.sendall(b"OK\n")
+                        if random.random() < PREY_ESCAPE_PROB:
+                            send_evt(mq, EV_PREY_ESCAPES)
+                            client_socket.sendall(b"ESCAPE\n")
+                        else:
+                            st[PREY] -= 1
+                            apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
+                            send_evt(mq, EV_PRED_EATS_PREY)
+                            client_socket.sendall(b"OK\n")
+                            if prey_procs:
+                                p = prey_procs.pop()
+                                try:
+                                    p.terminate()
+                                except Exception:
+                                    pass
+                                try:
+                                    procs.remove(p)
+                                except ValueError:
+                                    pass
                     else:
                         client_socket.sendall(b"ERR no prey\n")
 
@@ -408,14 +424,14 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                         st[PREY] += 1
                         apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
                         send_evt(mq, EV_PREY_REPRO)
-                        spawn_prey(procs)
+                        spawn_prey(procs, prey_procs)
                         client_socket.sendall(b"OK\n")
 
                     elif kind in ("pred", "predator"):
                         st[PRED] += 1
                         apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
                         send_evt(mq, EV_PRED_REPRO)
-                        spawn_predator(procs)
+                        spawn_predator(procs, pred_procs)
                         client_socket.sendall(b"OK\n")
 
                     else:
@@ -494,12 +510,14 @@ def main():
 
     # 5) socket server (prey/predator -> env)
     procs: list[Process] = []
-    t = threading.Thread(target=socket_server, args=(shared_mem, mutex, FMT, mq, procs), daemon=True)
+    prey_procs: list[Process] = []
+    pred_procs: list[Process] = []
+    t = threading.Thread(target=socket_server, args=(shared_mem, mutex, FMT, mq, procs, prey_procs, pred_procs), daemon=True)
     t.start()
 
     # 6) spawn population initiale (d'après INIT)
     time.sleep(0.2)
-    procs.extend(spawn_population(predators_n, preys_n))
+    spawn_population(predators_n, preys_n, procs, prey_procs, pred_procs)
     print(f"[env] spawned initial processes: pred={predators_n}, prey={preys_n}")
 
     # 7) boucle principale
