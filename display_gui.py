@@ -45,6 +45,7 @@ class DisplayGUI:
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(100, self.process_inbox)
+        self.root.after(1000, self.request_status)
 
     def _build_ui(self) -> None:
         main = ttk.Frame(self.root, padding=12)
@@ -115,6 +116,14 @@ class DisplayGUI:
 
         self.root.after(100, self.process_inbox)
 
+    def request_status(self) -> None:
+        if self.started:
+            try:
+                self.send_cmd("STATUS")
+            except Exception:
+                pass
+        self.root.after(1000, self.request_status)
+
     def send_cmd(self, cmd: str) -> None:
         self.mq.send(cmd.encode("utf-8"), type=TYPE_CMD)
 
@@ -184,6 +193,23 @@ class DisplayGUI:
         self.log.config(state="disabled")
 
     def handle_message(self, text: str) -> None:
+        if text.startswith("STATE "):
+            parts = text.split()
+            data = {}
+            for item in parts[1:]:
+                if "=" in item:
+                    k, v = item.split("=", 1)
+                    data[k] = v
+            try:
+                self.state["predators"] = int(data.get("pred", self.state["predators"]))
+                self.state["preys"] = int(data.get("prey", self.state["preys"]))
+                self.state["grass"] = int(data.get("grass", self.state["grass"]))
+                self.state["drought"] = int(data.get("drought", 0)) == 1
+            except ValueError:
+                pass
+            self.refresh_labels()
+            return
+
         if text == "ACK_INIT":
             self.refresh_labels()
             return
