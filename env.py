@@ -36,8 +36,12 @@ EV_PREY_DIES       = "Prey dies"
 EV_PRED_DIES       = "Predator dies"
 EV_DROUGHT         = "Drought"
 EV_GRASS_WITHERS   = "Grass withers"
-PREY_ESCAPE_PROB   = 0.35
+PREY_ESCAPE_PROB   = 0.15
 EV_PREY_ESCAPES    = "Prey escapes"
+EV_ALL_DEAD        = "All dead"
+
+active_prey_ids: set[str] = set()
+active_prey_lock = threading.Lock()
 
 
 def send_evt(mq: sysv_ipc.MessageQueue, text: str) -> None:
@@ -359,14 +363,35 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                     else:
                         client_socket.sendall(b"ERR unknown kind\n")
 
+                elif len(parts) == 1 and parts[0] == "ACTIVE_PREY":
+                    with active_prey_lock:
+                        n_active = len(active_prey_ids)
+                    client_socket.sendall(f"ACTIVE_PREY {n_active}\n".encode())
+
+                elif len(parts) == 4 and parts[0] == "STATE" and parts[1] == "prey":
+                    prey_id = parts[2]
+                    state = parts[3].upper()
+                    with active_prey_lock:
+                        if state == "ACTIVE":
+                            active_prey_ids.add(prey_id)
+                            client_socket.sendall(b"OK\n")
+                        elif state == "PASSIVE":
+                            active_prey_ids.discard(prey_id)
+                            client_socket.sendall(b"OK\n")
+                        else:
+                            client_socket.sendall(b"ERR bad state\n")
+
                 elif len(parts) >= 3 and parts[0] == "DIE":
                     kind = parts[1]
                     st = read_state(shared_mem, mutex)
 
                     if kind == "prey":
+                        prey_id = parts[2]
                         if st[PREY] > 0:
                             st[PREY] -= 1
                             apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
+                        with active_prey_lock:
+                            active_prey_ids.discard(prey_id)
                         send_evt(mq, EV_PREY_DIES)
                         client_socket.sendall(b"OK\n")
 
@@ -384,6 +409,10 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                     st = read_state(shared_mem, mutex)
 
                     if st[PREY] > 0:
+                        with active_prey_lock:
+                            if not active_prey_ids:
+                                client_socket.sendall(b"ERR no active prey\n")
+                                continue
                         if random.random() < PREY_ESCAPE_PROB:
                             send_evt(mq, EV_PREY_ESCAPES)
                             client_socket.sendall(b"ESCAPE\n")
@@ -392,6 +421,9 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                             apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
                             send_evt(mq, EV_PRED_EATS_PREY)
                             client_socket.sendall(b"OK\n")
+                            with active_prey_lock:
+                                if active_prey_ids:
+                                    active_prey_ids.pop()
                             if prey_procs:
                                 p = prey_procs.pop()
                                 try:
@@ -587,6 +619,10 @@ def main():
                 send_evt(mq, EV_GRASS_WITHERS)
 
             print("[env] state =", st, delta_txt)
+
+            if st[PRED] == 0 and st[PREY] == 0:
+                send_evt(mq, EV_ALL_DEAD)
+                running = False
 
     except KeyboardInterrupt:
         print("[env] shutting down (Ctrl+C)")

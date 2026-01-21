@@ -257,6 +257,10 @@ class DisplayGUI:
                 self.log_event("La secheresse s'arrete.")
         elif text == "Prey escapes":
             self.log_event("La proie a fait break le prédateur, PICORE MAINTENANT")
+        elif text == "All dead":
+            self.log_event("Tout le monde est mort. Fin de simulation.")
+            self.on_stop()
+            self.root.after(10000, self.root.destroy)
 
         self.refresh_labels()
 

@@ -14,11 +14,12 @@ TICK_SECONDS = 3
 ENERGY_START = 30
 ENERGY_DECAY = 1
 
-HUNGER_THRESHOLD = 25     # si energy < 10 => predateur cherche à manger
+HUNGER_THRESHOLD = 25     # au-dessus: passif, en-dessous: actif
 HUNT_COST = 2             # coût d'energie quand le predateur tente de manger
 EAT_GAIN = 20             # énergie gagnée si proie mangée
+REPRO_COST = 10           # coût d'energie quand reproduction réussie
 
-REPRO_THRESHOLD = 30     # si energy > 25 => predateur peut tenter reproduction
+REPRO_THRESHOLD = 29     # si energy > 25 => predateur peut tenter reproduction
 REPRO_PROB = 1         # 30% de chance par tick au-dessus du seuil
 
 
@@ -83,12 +84,19 @@ def main():
                     print(f"[pred {pred_id}] DIE failed (env?) -> {e}")
                 break
 
-            # D) si faim : tenter de manger
+            # D) si actif: tenter de manger avec proba qui augmente quand l'energie baisse (loi x^2)
             if energy < HUNGER_THRESHOLD:
+                try:
+                    resp = utils.send_cmd_persistent(s, buffer, "ACTIVE_PREY")
+                    parts = resp.split()
+                    active_prey = int(parts[1]) if len(parts) == 2 else 0
+                except Exception:
+                    active_prey = 0
+
                 hunger_ratio = (HUNGER_THRESHOLD - energy) / HUNGER_THRESHOLD
                 hunger_ratio = max(0.0, min(1.0, hunger_ratio))
                 eat_prob = hunger_ratio ** 2
-                if st[utils.PREY] > 0 and random.random() < eat_prob:
+                if active_prey > 0 and random.random() < eat_prob:
                     energy -= HUNT_COST
                     resp = utils.send_cmd_persistent(s, buffer, f"EAT_PREY {pred_id}")
                     if resp == "OK":
@@ -102,6 +110,8 @@ def main():
             # E) reproduction (optionnel)
             if energy > REPRO_THRESHOLD and random.random() < REPRO_PROB:
                 resp = utils.send_cmd_persistent(s, buffer, f"REPRODUCE pred {pred_id}")
+                if resp == "OK":
+                    energy -= REPRO_COST
                 print(f"[pred {pred_id}] reproduce attempt -> {resp}")
 
     if shared_mem is not None:
