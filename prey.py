@@ -14,11 +14,12 @@ TICK_SECONDS = 3
 ENERGY_START = 20
 ENERGY_DECAY = 1
 
-HUNGER_THRESHOLD = 14    # si energy < 10 => proie cherche à manger
-EAT_GAIN = 4               # énergie gagnée si herbe mangée
+HUNGER_THRESHOLD = 25   # si energy < 10 => proie cherche à manger
+EAT_GAIN = 5              # énergie gagnée si herbe mangée
 
-REPRO_THRESHOLD = 15      # si energy > 25 => proie peut tenter reproduction
+REPRO_THRESHOLD = 21      # si energy > 25 => proie peut tenter reproduction
 REPRO_PROB = 0.6         # 30% de chance par tick au-dessus du seuil
+REPRO_COST = 8            # coût d'énergie en cas de reproduction
 
 def main():
     prey_id = f"prey-{os.getpid()}-{random.randint(1000, 9999)}"
@@ -65,6 +66,9 @@ def main():
             if delta <= 0:
                 continue
             tick += delta
+            if st[utils.PREY] <= 0:
+                print(f"[prey {prey_id}] no prey left in world, exiting")
+                break
 
             # A) l'énergie diminue à chaque tick
             energy -= ENERGY_DECAY * delta
@@ -85,7 +89,7 @@ def main():
             if energy < HUNGER_THRESHOLD:
                 hunger_ratio = (HUNGER_THRESHOLD - energy) / HUNGER_THRESHOLD
                 hunger_ratio = max(0.0, min(1.0, hunger_ratio))
-                eat_prob = hunger_ratio ** 1.6
+                eat_prob = hunger_ratio ** 1.25
                 if st[utils.GRASS] > 0 and random.random() < eat_prob:
                     resp = utils.send_cmd_persistent(s, buffer, f"EAT_GRASS {prey_id}")
                     if resp == "OK":
@@ -98,6 +102,7 @@ def main():
             if energy > REPRO_THRESHOLD and random.random() < REPRO_PROB:
                 resp = utils.send_cmd_persistent(s, buffer, f"REPRODUCE prey {prey_id}")
                 print(f"[prey {prey_id}] reproduce attempt -> {resp}")
+                energy -= REPRO_COST
 
     if shared_mem is not None:
         try:

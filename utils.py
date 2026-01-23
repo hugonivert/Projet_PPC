@@ -3,7 +3,7 @@ import socket
 import sysv_ipc
 import queue
 import time
-from multiprocessing import shared_memory
+from multiprocessing import shared_memory, resource_tracker
 import struct
 
 # Shared world definitions (must match env.py)
@@ -78,6 +78,10 @@ def attach_world(retries: int = 50, delay: float = 0.1):
         try:
             mutex = sysv_ipc.Semaphore(SEMA_KEY)
             shared_mem = shared_memory.SharedMemory(name=SHM_NAME, create=False)
+            try:
+                resource_tracker.unregister(shared_mem._name, "shared_memory")
+            except Exception:
+                pass
             return shared_mem, mutex
         except Exception as e:
             last_err = e

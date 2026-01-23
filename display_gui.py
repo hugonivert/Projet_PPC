@@ -18,6 +18,7 @@ import socket
 import signal
 
 import sysv_ipc
+import cleanup
 
 MQ_KEY = 0x5678
 TYPE_CMD = 1   # display -> env
@@ -38,6 +39,7 @@ class DisplayGUI:
         self.started = False
         self.env_proc = None
 
+        cleanup.cleanup_ipc("WORLD", 0x1234, MQ_KEY, remove_mq=True)
         self.mq = sysv_ipc.MessageQueue(MQ_KEY, sysv_ipc.IPC_CREAT)
         self.inbox = queue.Queue()
         threading.Thread(target=self.mq_listener, daemon=True).start()
@@ -251,6 +253,12 @@ class DisplayGUI:
                 self.log_event("La secheresse s'arrete.")
         elif text == "Prey escapes":
             self.log_event("La proie a fait break le prédateur, PICORE MAINTENANT")
+        elif text.startswith("SIM_STOP"):
+            self.log_event("Simulation arretee pour preserver le PC (trop de proies).")
+            messagebox.showinfo("Simulation stoppee", "Simulation arretee pour preserver le PC (trop de proies).")
+            self.started = False
+            self.drought_btn.config(state="disabled")
+            self.stop_btn.config(state="disabled")
 
         self.refresh_labels()
 

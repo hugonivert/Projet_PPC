@@ -20,7 +20,7 @@ EAT_GAIN = 20             # énergie gagnée si proie mangée
 
 REPRO_THRESHOLD = 30     # si energy > 25 => predateur peut tenter reproduction
 REPRO_PROB = 1         # 30% de chance par tick au-dessus du seuil
-
+REPRO_COST = 10
 
 def main():
     pred_id = f"pred-{os.getpid()}-{random.randint(1000, 9999)}"
@@ -67,6 +67,9 @@ def main():
             if delta <= 0:
                 continue
             tick += delta
+            if st[utils.PRED] <= 0:
+                print(f"[pred {pred_id}] no predators left in world, exiting")
+                break
 
             # A) l'énergie diminue à chaque tick
             energy -= ENERGY_DECAY * delta
@@ -103,6 +106,7 @@ def main():
             if energy > REPRO_THRESHOLD and random.random() < REPRO_PROB:
                 resp = utils.send_cmd_persistent(s, buffer, f"REPRODUCE pred {pred_id}")
                 print(f"[pred {pred_id}] reproduce attempt -> {resp}")
+                energy -= REPRO_COST
 
     if shared_mem is not None:
         try:

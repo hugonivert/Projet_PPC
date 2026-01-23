@@ -13,6 +13,7 @@ import utils
 import prey
 import predator
 import drought
+import cleanup
 
 # constantes
 SHM_NAME = "WORLD"
@@ -38,6 +39,8 @@ EV_DROUGHT         = "Drought"
 EV_GRASS_WITHERS   = "Grass withers"
 PREY_ESCAPE_PROB   = 0.35
 EV_PREY_ESCAPES    = "Prey escapes"
+EV_SIM_STOP        = "SIM_STOP"
+PREY_LIMIT         = 120
 
 
 def send_evt(mq: sysv_ipc.MessageQueue, text: str) -> None:
@@ -232,6 +235,13 @@ def handle_cmd(cmd: str, shared_mem, mutex, mq, joined_counts, joined_lock) -> b
     return True
 
 
+def check_prey_limit(st: list[int], mq) -> bool:
+    if st[PREY] > PREY_LIMIT:
+        send_evt(mq, f"{EV_SIM_STOP} max_prey={PREY_LIMIT}")
+        return False
+    return True
+
+
 def spawn_prey(procs: list[Process], prey_procs: list[Process]) -> None:
     """
     Crée et démarre un nouveau processus proie (prey) et l’ajoute à la liste procs.
@@ -407,7 +417,9 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                 elif len(parts) == 2 and parts[0] == "EAT_PREY":
                     st = read_state(shared_mem, mutex)
 
-                    if st[PREY] > 0:
+                    if st[PRED] <= 0:
+                        client_socket.sendall(b"ERR no predator\n")
+                    elif st[PREY] > 0:
                         if random.random() < PREY_ESCAPE_PROB:
                             send_evt(mq, EV_PREY_ESCAPES)
                             client_socket.sendall(b"ESCAPE\n")
@@ -435,7 +447,9 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                 elif len(parts) == 2 and parts[0] == "EAT_GRASS":
                     st = read_state(shared_mem, mutex)
 
-                    if st[GRASS] > 0:
+                    if st[PREY] <= 0:
+                        client_socket.sendall(b"ERR no prey\n")
+                    elif st[GRASS] > 0:
                         st[GRASS] -= 1
                         apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
                         send_evt(mq, EV_PREY_EATS_GRASS)
@@ -448,6 +462,9 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                     st = read_state(shared_mem, mutex)
 
                     if kind == "prey":
+                        if st[PREY] <= 0:
+                            client_socket.sendall(b"ERR no prey\n")
+                            continue
                         st[PREY] += 1
                         apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
                         send_evt(mq, EV_PREY_REPRO)
@@ -455,6 +472,9 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                         client_socket.sendall(b"OK\n")
 
                     elif kind in ("pred", "predator"):
+                        if st[PRED] <= 0:
+                            client_socket.sendall(b"ERR no predator\n")
+                            continue
                         st[PRED] += 1
                         apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
                         send_evt(mq, EV_PRED_REPRO)
@@ -489,6 +509,9 @@ def main():
            - faire pousser l’herbe aléatoirement selon drought et notifier display via EV_GRASS_GROWS
         8) Cleanup: terminate agents, unlink SHM, remove semaphore, remove MQ.
     """
+    # cleanup stale IPC from a previous run (if any)
+    cleanup.cleanup_ipc(SHM_NAME, SEMA_KEY, MQ_KEY, remove_mq=False)
+
     # drought flags live in drought.py
     # mutex
     try:
@@ -497,15 +520,6 @@ def main():
     except sysv_ipc.ExistentialError:
         mutex = sysv_ipc.Semaphore(SEMA_KEY)
         print("[env] mutex attached (already exists)")
-
-    # reset shm stale
-    try:
-        old = shared_memory.SharedMemory(name=SHM_NAME, create=False)
-        old.close()
-        old.unlink()
-        print("[env] stale shared memory removed")
-    except FileNotFoundError:
-        pass
 
     shared_mem = shared_memory.SharedMemory(name=SHM_NAME, create=True, size=FMT.size)
     apply_state(shared_mem, mutex, 0, 0, 0, 0, 0)
@@ -548,13 +562,16 @@ def main():
     )
     t.start()
 
+    running = True
     # 6) spawn population initiale (d'après INIT)
     time.sleep(0.2)
     spawn_population(predators_n, preys_n, procs, prey_procs, pred_procs)
     print(f"[env] spawned initial processes: pred={predators_n}, prey={preys_n}")
+    st = read_state(shared_mem, mutex)
+    if not check_prey_limit(st, mq):
+        running = False
 
     # 7) boucle principale
-    running = True
     try:
         while running:
             # traiter commandes display->env
@@ -620,6 +637,7 @@ def main():
                 send_evt(mq, EV_GRASS_WITHERS)
 
             print("[env] state =", st, delta_txt)
+            running = check_prey_limit(st, mq)
 
     except KeyboardInterrupt:
         print("[env] shutting down (Ctrl+C)")
