@@ -36,12 +36,8 @@ EV_PREY_DIES       = "Prey dies"
 EV_PRED_DIES       = "Predator dies"
 EV_DROUGHT         = "Drought"
 EV_GRASS_WITHERS   = "Grass withers"
-PREY_ESCAPE_PROB   = 0.15
+PREY_ESCAPE_PROB   = 0.35
 EV_PREY_ESCAPES    = "Prey escapes"
-EV_ALL_DEAD        = "All dead"
-
-active_prey_ids: set[str] = set()
-active_prey_lock = threading.Lock()
 
 
 def send_evt(mq: sysv_ipc.MessageQueue, text: str) -> None:
@@ -161,7 +157,7 @@ def wait_for_init(mq: sysv_ipc.MessageQueue) -> tuple[int, int, int]:
         print("[env] Ignored (expect 'INIT p r g'):", text)
 
 
-def handle_cmd(cmd: str, shared_mem, mutex, mq) -> bool:
+def handle_cmd(cmd: str, shared_mem, mutex, mq, joined_counts, joined_lock) -> bool:
     """
     Traite une commande runtime envoyée par display pendant la simulation.
 
@@ -187,7 +183,20 @@ def handle_cmd(cmd: str, shared_mem, mutex, mq) -> bool:
 
     if parts[0] == "STATUS":
         st = read_state(shared_mem, mutex)
-        send_evt(mq, f"STATE pred={st[PRED]} prey={st[PREY]} grass={st[GRASS]} drought={st[DROUGHT]} tick={st[TICK]}")
+        with joined_lock:
+            joined_pred = joined_counts["pred"]
+            joined_prey = joined_counts["prey"]
+        send_evt(
+            mq,
+            "STATE "
+            f"pred={st[PRED]} "
+            f"prey={st[PREY]} "
+            f"grass={st[GRASS]} "
+            f"drought={st[DROUGHT]} "
+            f"tick={st[TICK]} "
+            f"joined_pred={joined_pred} "
+            f"joined_prey={joined_prey}"
+        )
         return True
 
     if parts[0] == "QUIT":
@@ -280,7 +289,7 @@ def spawn_population(n_pred: int, n_prey: int, procs: list[Process], prey_procs:
         spawn_predator(procs, pred_procs)
 
 
-def socket_server(shared_mem, mutex, fmt, mq, procs: list[Process], prey_procs: list[Process], pred_procs: list[Process]):
+def socket_server(shared_mem, mutex, fmt, mq, procs: list[Process], prey_procs: list[Process], pred_procs: list[Process], joined_counts, joined_lock):
     """
     Serveur TCP dans env : point d’entrée des événements envoyés par les processus prey/predator.
 
@@ -308,13 +317,13 @@ def socket_server(shared_mem, mutex, fmt, mq, procs: list[Process], prey_procs: 
             print("[env] Connected:", address)
             t = threading.Thread(
                 target=handle_client,
-                args=(client_socket, address, shared_mem, mutex, fmt, mq, procs, prey_procs, pred_procs),
+                args=(client_socket, address, shared_mem, mutex, fmt, mq, procs, prey_procs, pred_procs, joined_counts, joined_lock),
                 daemon=True
             )
             t.start()
 
 
-def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: list[Process], prey_procs: list[Process], pred_procs: list[Process]):
+def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: list[Process], prey_procs: list[Process], pred_procs: list[Process], joined_counts, joined_lock):
     """
     Gère une connexion TCP persistante provenant d’un agent (prey ou predator).
 
@@ -359,39 +368,26 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                 if len(parts) == 2 and parts[0] == "JOIN":
                     kind = parts[1]
                     if kind in ("prey", "predator"):
+                        with joined_lock:
+                            if kind == "prey":
+                                joined_counts["prey"] += 1
+                            else:
+                                joined_counts["pred"] += 1
                         client_socket.sendall(b"OK\n")
                     else:
                         client_socket.sendall(b"ERR unknown kind\n")
-
-                elif len(parts) == 1 and parts[0] == "ACTIVE_PREY":
-                    with active_prey_lock:
-                        n_active = len(active_prey_ids)
-                    client_socket.sendall(f"ACTIVE_PREY {n_active}\n".encode())
-
-                elif len(parts) == 4 and parts[0] == "STATE" and parts[1] == "prey":
-                    prey_id = parts[2]
-                    state = parts[3].upper()
-                    with active_prey_lock:
-                        if state == "ACTIVE":
-                            active_prey_ids.add(prey_id)
-                            client_socket.sendall(b"OK\n")
-                        elif state == "PASSIVE":
-                            active_prey_ids.discard(prey_id)
-                            client_socket.sendall(b"OK\n")
-                        else:
-                            client_socket.sendall(b"ERR bad state\n")
 
                 elif len(parts) >= 3 and parts[0] == "DIE":
                     kind = parts[1]
                     st = read_state(shared_mem, mutex)
 
                     if kind == "prey":
-                        prey_id = parts[2]
                         if st[PREY] > 0:
                             st[PREY] -= 1
                             apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
-                        with active_prey_lock:
-                            active_prey_ids.discard(prey_id)
+                        with joined_lock:
+                            if joined_counts["prey"] > 0:
+                                joined_counts["prey"] -= 1
                         send_evt(mq, EV_PREY_DIES)
                         client_socket.sendall(b"OK\n")
 
@@ -399,6 +395,9 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                         if st[PRED] > 0:
                             st[PRED] -= 1
                             apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
+                        with joined_lock:
+                            if joined_counts["pred"] > 0:
+                                joined_counts["pred"] -= 1
                         send_evt(mq, EV_PRED_DIES)
                         client_socket.sendall(b"OK\n")
 
@@ -409,21 +408,17 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                     st = read_state(shared_mem, mutex)
 
                     if st[PREY] > 0:
-                        with active_prey_lock:
-                            if not active_prey_ids:
-                                client_socket.sendall(b"ERR no active prey\n")
-                                continue
                         if random.random() < PREY_ESCAPE_PROB:
                             send_evt(mq, EV_PREY_ESCAPES)
                             client_socket.sendall(b"ESCAPE\n")
                         else:
                             st[PREY] -= 1
                             apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
+                            with joined_lock:
+                                if joined_counts["prey"] > 0:
+                                    joined_counts["prey"] -= 1
                             send_evt(mq, EV_PRED_EATS_PREY)
                             client_socket.sendall(b"OK\n")
-                            with active_prey_lock:
-                                if active_prey_ids:
-                                    active_prey_ids.pop()
                             if prey_procs:
                                 p = prey_procs.pop()
                                 try:
@@ -537,6 +532,8 @@ def main():
 
     # 4) listener MQ runtime (display -> env)
     inbox = queue.Queue()
+    joined_counts = {"pred": 0, "prey": 0}
+    joined_lock = threading.Lock()
     mq_thread = threading.Thread(target=utils.mq_listener, args=(mq, TYPE_CMD, inbox), daemon=True)
     mq_thread.start()
 
@@ -544,7 +541,11 @@ def main():
     procs: list[Process] = []
     prey_procs: list[Process] = []
     pred_procs: list[Process] = []
-    t = threading.Thread(target=socket_server, args=(shared_mem, mutex, FMT, mq, procs, prey_procs, pred_procs), daemon=True)
+    t = threading.Thread(
+        target=socket_server,
+        args=(shared_mem, mutex, FMT, mq, procs, prey_procs, pred_procs, joined_counts, joined_lock),
+        daemon=True,
+    )
     t.start()
 
     # 6) spawn population initiale (d'après INIT)
@@ -562,7 +563,7 @@ def main():
                     cmd = inbox.get_nowait()
                 except queue.Empty:
                     break
-                running = handle_cmd(cmd, shared_mem, mutex, mq)
+                running = handle_cmd(cmd, shared_mem, mutex, mq, joined_counts, joined_lock)
                 if not running:
                     break
 
@@ -619,10 +620,6 @@ def main():
                 send_evt(mq, EV_GRASS_WITHERS)
 
             print("[env] state =", st, delta_txt)
-
-            if st[PRED] == 0 and st[PREY] == 0:
-                send_evt(mq, EV_ALL_DEAD)
-                running = False
 
     except KeyboardInterrupt:
         print("[env] shutting down (Ctrl+C)")

@@ -14,11 +14,10 @@ TICK_SECONDS = 3
 ENERGY_START = 20
 ENERGY_DECAY = 1
 
-HUNGER_THRESHOLD = 25     # au-dessus: passif, en-dessous: actif
-EAT_GAIN = 3               # énergie gagnée si herbe mangée
-REPRO_COST = 12             # coût d'energie quand reproduction réussie
+HUNGER_THRESHOLD = 14    # si energy < 10 => proie cherche à manger
+EAT_GAIN = 4               # énergie gagnée si herbe mangée
 
-REPRO_THRESHOLD = 21      # si energy > 25 => proie peut tenter reproduction
+REPRO_THRESHOLD = 15      # si energy > 25 => proie peut tenter reproduction
 REPRO_PROB = 0.6         # 30% de chance par tick au-dessus du seuil
 
 def main():
@@ -49,12 +48,6 @@ def main():
         except Exception as e:
             print(f"[prey {prey_id}] SHM attach failed -> {e}")
             return
-        is_active = energy < HUNGER_THRESHOLD
-        try:
-            state_txt = "ACTIVE" if is_active else "PASSIVE"
-            utils.send_cmd_persistent(s, buffer, f"STATE prey {prey_id} {state_txt}")
-        except Exception:
-            pass
 
         # 2) Boucle de vie (calée sur le tick global)
         st = utils.read_state(shared_mem, mutex)
@@ -79,16 +72,6 @@ def main():
             # B) log
             #print(f"[prey {prey_id}] tick={tick} energy={energy}")
 
-            # Bbis) update actif/passif
-            now_active = energy < HUNGER_THRESHOLD
-            if now_active != is_active:
-                is_active = now_active
-                try:
-                    state_txt = "ACTIVE" if is_active else "PASSIVE"
-                    utils.send_cmd_persistent(s, buffer, f"STATE prey {prey_id} {state_txt}")
-                except Exception:
-                    pass
-
             # C) mort : prévenir env + quitter
             if energy < 0:
                 try:
@@ -98,11 +81,11 @@ def main():
                     print(f"[prey {prey_id}] DIE failed (env?) -> {e}")
                 break
 
-            # D) si active: tenter de manger avec proba qui augmente quand l'energie baisse (loi x^2)
-            if is_active:
+            # D) si faim : tenter de manger
+            if energy < HUNGER_THRESHOLD:
                 hunger_ratio = (HUNGER_THRESHOLD - energy) / HUNGER_THRESHOLD
                 hunger_ratio = max(0.0, min(1.0, hunger_ratio))
-                eat_prob = hunger_ratio ** 2
+                eat_prob = hunger_ratio ** 1.6
                 if st[utils.GRASS] > 0 and random.random() < eat_prob:
                     resp = utils.send_cmd_persistent(s, buffer, f"EAT_GRASS {prey_id}")
                     if resp == "OK":
@@ -114,8 +97,6 @@ def main():
             # E) reproduction (optionnel)
             if energy > REPRO_THRESHOLD and random.random() < REPRO_PROB:
                 resp = utils.send_cmd_persistent(s, buffer, f"REPRODUCE prey {prey_id}")
-                if resp == "OK":
-                    energy -= REPRO_COST
                 print(f"[prey {prey_id}] reproduce attempt -> {resp}")
 
     if shared_mem is not None:

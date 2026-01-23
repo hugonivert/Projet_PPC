@@ -74,8 +74,8 @@ class DisplayGUI:
 
         ttk.Label(main, text="Live state").grid(row=5, column=0, columnspan=2, sticky="w")
 
-        self.pred_lbl = ttk.Label(main, text="Predators: 0")
-        self.prey_lbl = ttk.Label(main, text="Preys: 0")
+        self.pred_lbl = ttk.Label(main, text="Predators (effective): 0")
+        self.prey_lbl = ttk.Label(main, text="Preys (effective): 0")
         self.grass_lbl = ttk.Label(main, text="Grass: 0")
         self.drought_lbl = ttk.Label(main, text="Drought: OFF")
 
@@ -140,8 +140,8 @@ class DisplayGUI:
             messagebox.showerror("Error", "Values must be >= 0.")
             return
 
-        self.state["predators"] = predators
-        self.state["preys"] = preys
+        self.state["predators"] = 0
+        self.state["preys"] = 0
         self.state["grass"] = grass
         self.state["drought"] = False
         self.refresh_labels()
@@ -172,8 +172,8 @@ class DisplayGUI:
         self.send_cmd(f"SET DROUGHT {desired}")
 
     def refresh_labels(self) -> None:
-        self.pred_lbl.config(text=f"Predators: {self.state['predators']}")
-        self.prey_lbl.config(text=f"Preys: {self.state['preys']}")
+        self.pred_lbl.config(text=f"Predators (effective): {self.state['predators']}")
+        self.prey_lbl.config(text=f"Preys (effective): {self.state['preys']}")
         self.grass_lbl.config(text=f"Grass: {self.state['grass']}")
         self.drought_lbl.config(text=f"Drought: {'ON' if self.state['drought'] else 'OFF'}")
 
@@ -201,8 +201,10 @@ class DisplayGUI:
                     k, v = item.split("=", 1)
                     data[k] = v
             try:
-                self.state["predators"] = int(data.get("pred", self.state["predators"]))
-                self.state["preys"] = int(data.get("prey", self.state["preys"]))
+                pred_val = data.get("joined_pred", data.get("pred", self.state["predators"]))
+                prey_val = data.get("joined_prey", data.get("prey", self.state["preys"]))
+                self.state["predators"] = int(pred_val)
+                self.state["preys"] = int(prey_val)
                 self.state["grass"] = int(data.get("grass", self.state["grass"]))
                 self.state["drought"] = int(data.get("drought", 0)) == 1
             except ValueError:
@@ -215,8 +217,6 @@ class DisplayGUI:
             return
 
         if text == "Predator eats Prey":
-            if self.state["preys"] > 0:
-                self.state["preys"] -= 1
             self.log_event("Un predateur a mange une proie.")
 
         elif text == "Prey eats Grass":
@@ -232,21 +232,15 @@ class DisplayGUI:
                 self.state["grass"] -= 1
 
         elif text == "Predator reproduces":
-            self.state["predators"] += 1
             self.log_event("Un predateur s'est reproduit.")
 
         elif text == "Prey reproduces":
-            self.state["preys"] += 1
             self.log_event("Une proie s'est reproduite.")
 
         elif text == "Prey dies":
-            if self.state["preys"] > 0:
-                self.state["preys"] -= 1
             self.log_event("Une proie est morte.")
 
         elif text == "Predator dies":
-            if self.state["predators"] > 0:
-                self.state["predators"] -= 1
             self.log_event("Un predateur est mort.")
 
         elif text == "Drought":
@@ -257,10 +251,6 @@ class DisplayGUI:
                 self.log_event("La secheresse s'arrete.")
         elif text == "Prey escapes":
             self.log_event("La proie a fait break le prédateur, PICORE MAINTENANT")
-        elif text == "All dead":
-            self.log_event("Tout le monde est mort. Fin de simulation.")
-            self.on_stop()
-            self.root.after(10000, self.root.destroy)
 
         self.refresh_labels()
 
