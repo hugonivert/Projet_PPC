@@ -71,7 +71,7 @@ def mq_listener(mq: sysv_ipc.MessageQueue, ntype: int, inbox: queue.Queue):
 
 def attach_world(retries: int = 50, delay: float = 0.1):
     """
-    Attache la SHM + sAcmaphore de l'env (WORLD). Retry pour laisser le temps Aÿ env.
+    Attache la SHM + sémaphore de l'env. Retry pour laisser le temps à env.
     """
     last_err: Exception | None = None
     for _ in range(retries):
@@ -91,7 +91,7 @@ def attach_world(retries: int = 50, delay: float = 0.1):
 
 def read_state(shared_mem, mutex) -> list[int]:
     """
-    Lit l'Actat global (5 entiers) depuis la mAcmoire partagAce (SHM), de faAon atomique.
+    Lit l'état global (5 entiers) depuis la mémoire partagée (SHM), de façon atomique.
     """
     mutex.acquire()
     try:

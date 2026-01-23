@@ -12,7 +12,6 @@ import signal
 import utils
 import prey
 import predator
-import drought
 import cleanup
 
 # constantes
@@ -40,10 +39,14 @@ EV_GRASS_WITHERS   = "Grass withers"
 PREY_ESCAPE_PROB   = 0.35
 EV_PREY_ESCAPES    = "Prey escapes"
 EV_SIM_STOP        = "SIM_STOP"
-PREY_LIMIT         = 120
+PREY_LIMIT         = 120 #pour éviter de faire planter le pc
+DROUGHT_MIN_TICKS  = 10
+DROUGHT_MAX_TICKS  = 20
 
+drought_until_tick = None
+toggle_drought_requested = False
 
-def send_evt(mq: sysv_ipc.MessageQueue, text: str) -> None:
+def send_evt(mq,text):
     """
     Envoie un événement (texte) au processus display via la System V MessageQueue.
 
@@ -60,23 +63,39 @@ def send_evt(mq: sysv_ipc.MessageQueue, text: str) -> None:
 
 
 def set_drought_env(shared_mem, mutex, mq, st: list[int], on: bool, reason: str) -> None:
-    drought.set_drought(
-        shared_mem,
-        mutex,
-        mq,
-        st,
-        on,
-        reason,
-        apply_state=apply_state,
-        send_evt=send_evt,
-        ev_drought=EV_DROUGHT,
-        idx_pred=PRED,
-        idx_prey=PREY,
-        idx_grass=GRASS,
-        idx_drought=DROUGHT,
-        idx_tick=TICK,
-    )
+    """
+    Bascule la secheresse dans l'etat global et notifie display.
 
+    Effets:
+        - Met a jour la SHM (flag drought + tick)
+        - Envoie EV_DROUGHT a display
+        - Gere la duree via drought_until_tick
+    """
+    global drought_until_tick
+
+    if on:
+        if st[DROUGHT] == 1:
+            return
+        duration = random.randint(DROUGHT_MIN_TICKS, DROUGHT_MAX_TICKS)
+        st[DROUGHT] = 1
+        drought_until_tick = st[TICK] + duration
+        apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
+        send_evt(mq, EV_DROUGHT)
+        print(f"[env] drought ON ({reason}, {duration} ticks)")
+    else:
+        if st[DROUGHT] == 0:
+            return
+        st[DROUGHT] = 0
+        drought_until_tick = None
+        apply_state(shared_mem, mutex, st[PRED], st[PREY], st[GRASS], st[DROUGHT], st[TICK])
+        send_evt(mq, EV_DROUGHT)
+        print(f"[env] drought OFF ({reason})")
+
+
+def on_drought_signal(signum, frame) -> None:
+    del signum, frame
+    global toggle_drought_requested
+    toggle_drought_requested = True
 
 def apply_state(shared_mem, mutex, pred: int, prey_n: int, grass: int, drought: int, tick: int) -> None:
     """
@@ -387,7 +406,7 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                     else:
                         client_socket.sendall(b"ERR unknown kind\n")
 
-                elif len(parts) >= 3 and parts[0] == "DIE":
+                elif len(parts) >= 2 and parts[0] == "DIE":
                     kind = parts[1]
                     st = read_state(shared_mem, mutex)
 
@@ -414,7 +433,7 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                     else:
                         client_socket.sendall(b"ERR bad DIE kind\n")
 
-                elif len(parts) == 2 and parts[0] == "EAT_PREY":
+                elif len(parts) == 1 and parts[0] == "EAT_PREY":
                     st = read_state(shared_mem, mutex)
 
                     if st[PRED] <= 0:
@@ -457,7 +476,7 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                     else:
                         client_socket.sendall(b"ERR no grass\n")
 
-                elif len(parts) >= 3 and parts[0] == "REPRODUCE":
+                elif len(parts) >= 2 and parts[0] == "REPRODUCE":
                     kind = parts[1]
                     st = read_state(shared_mem, mutex)
 
@@ -509,10 +528,11 @@ def main():
            - faire pousser l’herbe aléatoirement selon drought et notifier display via EV_GRASS_GROWS
         8) Cleanup: terminate agents, unlink SHM, remove semaphore, remove MQ.
     """
+    global toggle_drought_requested
+
     # cleanup stale IPC from a previous run (if any)
     cleanup.cleanup_ipc(SHM_NAME, SEMA_KEY, MQ_KEY, remove_mq=False)
 
-    # drought flags live in drought.py
     # mutex
     try:
         mutex = sysv_ipc.Semaphore(SEMA_KEY, sysv_ipc.IPC_CREX, initial_value=1)
@@ -538,11 +558,9 @@ def main():
     # 3) ACK
     send_evt(mq, "ACK_INIT")
 
-    # signal handler for drought toggling
-    signal.signal(signal.SIGUSR1, drought.on_drought_signal)
+    # signal handler for drought start (external process)
+    signal.signal(signal.SIGUSR1, on_drought_signal)
 
-    # schedule random droughts via timer
-    drought.schedule_drought_timer()
 
     # 4) listener MQ runtime (display -> env)
     inbox = queue.Queue()
@@ -584,18 +602,12 @@ def main():
                 if not running:
                     break
 
-            # signal toggle request
-            if drought.toggle_drought_requested:
-                st = read_state(shared_mem, mutex)
-                set_drought_env(shared_mem, mutex, mq, st, st[DROUGHT] == 0, "signal")
-                drought.toggle_drought_requested = False
-
-            # random drought request (timer-based)
-            if drought.random_drought_requested:
+            # signal drought request
+            if toggle_drought_requested:
                 st = read_state(shared_mem, mutex)
                 if st[DROUGHT] == 0:
-                    set_drought_env(shared_mem, mutex, mq, st, True, "random")
-                drought.random_drought_requested = False
+                    set_drought_env(shared_mem, mutex, mq, st, True, "signal")
+                toggle_drought_requested = False
 
             time.sleep(1)
 
@@ -627,7 +639,7 @@ def main():
                 mutex.release()
 
             # fin automatique de secheresse (apres mise a jour tick)
-            if st[DROUGHT] == 1 and drought.drought_until_tick is not None and st[TICK] >= drought.drought_until_tick:
+            if st[DROUGHT] == 1 and drought_until_tick is not None and st[TICK] >= drought_until_tick:
                 set_drought_env(shared_mem, mutex, mq, st, False, "timeout")
 
             # On envoie les events d'herbe apres la mise a jour SHM.
@@ -642,7 +654,6 @@ def main():
     except KeyboardInterrupt:
         print("[env] shutting down (Ctrl+C)")
     finally:
-        drought.cancel_drought_timer()
         # cleanup
         for p in procs:
             try:

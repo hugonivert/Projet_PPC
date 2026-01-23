@@ -1,56 +1,52 @@
 import socket
 import time
-import os
 import random
 import utils
 
+#Pour la connexion au socket de env
 HOST = "localhost"
 PORT = 6666
-
-# Simulation
-TICK_SECONDS = 3
 
 # "Biologie" de la proie
 ENERGY_START = 20
 ENERGY_DECAY = 1
 
-HUNGER_THRESHOLD = 25   # si energy < 10 => proie cherche à manger
+HUNGER_THRESHOLD = 25   # seuil à partir duquel une proie manger
 EAT_GAIN = 5              # énergie gagnée si herbe mangée
 
-REPRO_THRESHOLD = 21      # si energy > 25 => proie peut tenter reproduction
-REPRO_PROB = 0.6         # 30% de chance par tick au-dessus du seuil
-REPRO_COST = 8            # coût d'énergie en cas de reproduction
+REPRO_THRESHOLD = 21      # seuil à partir duquel un predator peut tenter de se reproduire
+REPRO_PROB = 0.6         # probabilité de créer un nouveau prédateur après un accouplement 
+REPRO_COST = 8          # coût d'énergie d'une reproduction
 
 def main():
-    prey_id = f"prey-{os.getpid()}-{random.randint(1000, 9999)}"
-    print(f"[prey] starting id={prey_id}")
+    print("[prey] starting")
 
     energy = ENERGY_START
     tick = 0
     shared_mem = None
     mutex = None
 
-    # Connexion persistante : 1 socket pour toute la vie de la proie
+    # Connexion au socket de env
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(5.0)
+        s.settimeout(10.0)
         s.connect((HOST, PORT))
         buffer = bytearray()
 
-        # 1) JOIN
+        # JOIN
         resp = utils.send_cmd_persistent(s, buffer, f"JOIN prey")
         if resp != "OK":
-            print(f"[prey {prey_id}] JOIN failed -> {resp}")
+            print(f"[prey] JOIN failed -> {resp}")
             return
-        print(f"[prey {prey_id}] JOIN OK")
+        print("[prey] JOIN OK")
 
-        # 1bis) attacher la SHM pour lire l'Actat global
+        # Attacher la SHM pour lire l'état global
         try:
-            shared_mem, mutex = utils.attach_world()
+            shared_mem, mutex = utils.attach_world() #attache env grâce à un SHM qui sera protégée par un mutex
         except Exception as e:
-            print(f"[prey {prey_id}] SHM attach failed -> {e}")
+            print(f"[prey] SHM attach failed -> {e}")
             return
 
-        # 2) Boucle de vie (calée sur le tick global)
+        # Boucle de vie (calée sur le tick global)
         st = utils.read_state(shared_mem, mutex)
         last_tick = st[utils.TICK]
         while True:
@@ -58,50 +54,47 @@ def main():
             st = utils.read_state(shared_mem, mutex)
             if st[utils.TICK] == last_tick:
                 continue
-            delta = st[utils.TICK] - last_tick
+            delta = st[utils.TICK] - last_tick #nombre de ticks qui se sont écoulés depuis la dernière boucle de ce processus
             last_tick = st[utils.TICK]
             if delta < 0 or (delta == 0 and last_tick > 0):
-                print(f"[prey {prey_id}] env restarted, exiting")
+                print("[prey] env restarted, exiting")
                 break
             if delta <= 0:
                 continue
-            tick += delta
-            if st[utils.PREY] <= 0:
-                print(f"[prey {prey_id}] no prey left in world, exiting")
+            tick += delta #comptage tick de l'individu 
+            if st[utils.PREY] <= 0: #vérification que le process en cours n'est pas un process fantome
+                print("[prey] no prey left in world, exiting")
                 break
 
-            # A) l'énergie diminue à chaque tick
+            # l'énergie diminue à chaque tick
             energy -= ENERGY_DECAY * delta
 
-            # B) log
-            #print(f"[prey {prey_id}] tick={tick} energy={energy}")
-
-            # C) mort : prévenir env + quitter
+            # mort : prévenir env + quitter
             if energy < 0:
                 try:
-                    resp = utils.send_cmd_persistent(s, buffer, f"DIE prey {prey_id}")
-                    print(f"[prey {prey_id}] DIE -> env says: {resp}")
+                    resp = utils.send_cmd_persistent(s, buffer, f"DIE prey")
+                    print(f"[prey] DIE -> env says: {resp}")
                 except Exception as e:
-                    print(f"[prey {prey_id}] DIE failed (env?) -> {e}")
+                    print(f"[prey] DIE failed (env?) -> {e}")
                 break
 
-            # D) si faim : tenter de manger
+            # si faim : tenter de manger
             if energy < HUNGER_THRESHOLD:
-                hunger_ratio = (HUNGER_THRESHOLD - energy) / HUNGER_THRESHOLD
-                hunger_ratio = max(0.0, min(1.0, hunger_ratio))
-                eat_prob = hunger_ratio ** 1.25
+                hunger_ratio = (HUNGER_THRESHOLD - energy) / HUNGER_THRESHOLD #plus l'énergie baisse plus l'individu à faim
+                hunger_ratio = max(0.0, min(1.0, hunger_ratio)) #gérer le cas où energy > HUNGER_THRESHOLD
+                eat_prob = hunger_ratio ** 1.25 #faim non linéaire 
                 if st[utils.GRASS] > 0 and random.random() < eat_prob:
-                    resp = utils.send_cmd_persistent(s, buffer, f"EAT_GRASS {prey_id}")
+                    resp = utils.send_cmd_persistent(s, buffer, f"EAT_GRASS")
                     if resp == "OK":
                         energy += EAT_GAIN
-                        print(f"[prey {prey_id}] ate grass (+{EAT_GAIN}) -> energy={energy}")
+                        print(f"[prey] ate grass (+{EAT_GAIN}) -> energy={energy}")
                     else:
-                        print(f"[prey {prey_id}] could not eat grass -> {resp}")
+                        print(f"[prey] could not eat grass -> {resp}")
 
-            # E) reproduction (optionnel)
+            # reproduction
             if energy > REPRO_THRESHOLD and random.random() < REPRO_PROB:
-                resp = utils.send_cmd_persistent(s, buffer, f"REPRODUCE prey {prey_id}")
-                print(f"[prey {prey_id}] reproduce attempt -> {resp}")
+                resp = utils.send_cmd_persistent(s, buffer, f"REPRODUCE prey")
+                print(f"[prey] reproduce attempt -> {resp}")
                 energy -= REPRO_COST
 
     if shared_mem is not None:

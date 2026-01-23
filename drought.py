@@ -1,97 +1,24 @@
 # drought.py
-# Drought logic (used by env) + optional CLI signal sender.
+# External drought signaler for env (SIGUSR1).
 #
 # Usage:
-#   python3 drought.py <env_pid>
-#   python3 drought.py --pidfile env.pid
+#   python drought.py <env_pid>
+#   python drought.py --pidfile env.pid
+#   python drought.py --random <env_pid>
+#   python drought.py --random --pidfile env.pid
 
 import argparse
 import os
 import random
 import signal
 import sys
-import threading
-
-
-# Drought parameters
-DROUGHT_MIN_TICKS = 10
-DROUGHT_MAX_TICKS = 20
-TICK_SECONDS = 1.0
-DROUGHT_RANDOM_MAX_DELAY_TICKS = 100  # random timer between 1..100 ticks
-
-drought_until_tick = None
-toggle_drought_requested = False
-random_drought_requested = False
-drought_timer = None
-
-
-def cancel_drought_timer() -> None:
-    global drought_timer
-    if drought_timer is not None:
-        drought_timer.cancel()
-        drought_timer = None
-
-
-def schedule_drought_timer() -> None:
-    global drought_timer
-    delay_ticks = random.randint(1, DROUGHT_RANDOM_MAX_DELAY_TICKS)
-    delay = delay_ticks * TICK_SECONDS
-    drought_timer = threading.Timer(delay, request_random_drought)
-    drought_timer.daemon = True
-    drought_timer.start()
-
-
-def request_random_drought() -> None:
-    global random_drought_requested
-    random_drought_requested = True
-
-
-def set_drought(
-    shared_mem,
-    mutex,
-    mq,
-    st: list[int],
-    on: bool,
-    reason: str,
-    *,
-    apply_state,
-    send_evt,
-    ev_drought: str,
-    idx_pred: int,
-    idx_prey: int,
-    idx_grass: int,
-    idx_drought: int,
-    idx_tick: int,
-) -> None:
-    global drought_until_tick
-
-    if on:
-        if st[idx_drought] == 1:
-            return
-        cancel_drought_timer()
-        duration = random.randint(DROUGHT_MIN_TICKS, DROUGHT_MAX_TICKS)
-        st[idx_drought] = 1
-        drought_until_tick = st[idx_tick] + duration
-        apply_state(shared_mem, mutex, st[idx_pred], st[idx_prey], st[idx_grass], st[idx_drought], st[idx_tick])
-        send_evt(mq, ev_drought)
-        print(f"[env] drought ON ({reason}, {duration} ticks)")
-    else:
-        if st[idx_drought] == 0:
-            return
-        st[idx_drought] = 0
-        drought_until_tick = None
-        apply_state(shared_mem, mutex, st[idx_pred], st[idx_prey], st[idx_grass], st[idx_drought], st[idx_tick])
-        send_evt(mq, ev_drought)
-        print(f"[env] drought OFF ({reason})")
-        schedule_drought_timer()
-
-
-def on_drought_signal(signum, frame):
-    global toggle_drought_requested
-    toggle_drought_requested = True
+import time
 
 
 def read_pidfile(path: str) -> int:
+    """
+    Lit un PID depuis un fichier texte et le renvoie en int.
+    """
     try:
         with open(path, "r", encoding="utf-8") as f:
             content = f.read().strip()
@@ -100,10 +27,37 @@ def read_pidfile(path: str) -> int:
         raise RuntimeError(f"Cannot read pidfile '{path}': {exc}") from exc
 
 
+def send_signal(pid: int) -> None:
+    """
+    Envoie SIGUSR1 au processus cible.
+    """
+    os.kill(pid, signal.SIGUSR1)
+
+
+def random_signal_loop(pid: int, min_delay: int, max_delay: int) -> None:
+    """
+    Envoie SIGUSR1 en boucle avec un delai aleatoire entre min_delay et max_delay.
+    """
+    if min_delay <= 0 or max_delay < min_delay:
+        raise ValueError("Invalid delay range")
+
+    while True:
+        delay = random.randint(min_delay, max_delay)
+        time.sleep(delay)
+        send_signal(pid)
+        print(f"[drought] sent SIGUSR1 to pid={pid} (delay={delay}s)")
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Toggle drought in env via SIGUSR1.")
+    """
+    Entree CLI pour envoyer SIGUSR1 une fois ou en boucle aleatoire.
+    """
+    parser = argparse.ArgumentParser(description="Signal env to start drought via SIGUSR1.")
     parser.add_argument("pid", nargs="?", type=int, help="PID of env process")
     parser.add_argument("--pidfile", default=None, help="Path to pidfile (default: none)")
+    parser.add_argument("--random", action="store_true", help="Send random signals in a loop")
+    parser.add_argument("--min-delay", type=int, default=10, help="Min delay in seconds")
+    parser.add_argument("--max-delay", type=int, default=100, help="Max delay in seconds")
     args = parser.parse_args()
 
     if args.pidfile:
@@ -115,12 +69,15 @@ def main() -> int:
         return 2
 
     try:
-        os.kill(pid, signal.SIGUSR1)
+        if args.random:
+            random_signal_loop(pid, args.min_delay, args.max_delay)
+        else:
+            send_signal(pid)
+            print(f"[drought] sent SIGUSR1 to pid={pid}")
     except Exception as exc:
         print(f"error: failed to signal pid {pid}: {exc}", file=sys.stderr)
         return 1
 
-    print(f"[drought] sent SIGUSR1 to pid={pid}")
     return 0
 
 
