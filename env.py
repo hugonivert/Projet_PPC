@@ -1,4 +1,4 @@
-# env.py
+﻿# env.py
 from multiprocessing import shared_memory, Process
 import struct
 import sysv_ipc
@@ -8,6 +8,9 @@ import time
 import queue
 import random
 import signal
+import subprocess
+import os
+import sys
 
 import utils
 import prey
@@ -357,10 +360,10 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
     Gère une connexion TCP persistante provenant d’un agent (prey ou predator).
 
     But:
-        - Lire des commandes ligne-par-ligne (séparées par '\\n')
+        - Lire des commandes ligne-par-ligne (séparées par '\n')
         - Appliquer les effets sur l’état global (SHM)
         - Envoyer les événements correspondants à display via MQ
-        - Répondre "OK\\n" ou "ERR ...\\n" au client (agent)
+        - Répondre "OK\n" ou "ERR ...\n" au client (agent)
 
     Protocole commandes supportées:
         - JOIN prey|predator
@@ -372,7 +375,7 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
 
     Fonctionnement:
         - Accumule des bytes dans un buffer
-        - Découpe dès qu’un '\\n' est présent (commande complète)
+        - Découpe dès qu’un '\n' est présent (commande complète)
         - Parse et dispatch vers la logique associée
     """
     print("[env] handling client:", address)
@@ -380,7 +383,11 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
 
     with client_socket:
         while True:
-            chunk = client_socket.recv(1024)
+            try:
+                chunk = client_socket.recv(1024)
+            except (ConnectionResetError, OSError):
+                print("[env] client disconnected:", address)
+                break
             if not chunk:
                 print("[env] client disconnected:", address)
                 break
@@ -433,7 +440,7 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                     else:
                         client_socket.sendall(b"ERR bad DIE kind\n")
 
-                elif len(parts) == 1 and parts[0] == "EAT_PREY":
+                elif len(parts) >= 2 and parts[0] == "EAT_PREY":
                     st = read_state(shared_mem, mutex)
 
                     if st[PRED] <= 0:
@@ -463,7 +470,7 @@ def handle_client(client_socket, address, shared_mem, mutex, fmt, mq, procs: lis
                     else:
                         client_socket.sendall(b"ERR no prey\n")
 
-                elif len(parts) == 2 and parts[0] == "EAT_GRASS":
+                elif len(parts) >= 2 and parts[0] == "EAT_GRASS":
                     st = read_state(shared_mem, mutex)
 
                     if st[PREY] <= 0:
@@ -561,6 +568,12 @@ def main():
     # signal handler for drought start (external process)
     signal.signal(signal.SIGUSR1, on_drought_signal)
 
+    # lance un process externe drought pour des secheresses aleatoires
+    drought_proc = subprocess.Popen(
+        [sys.executable, "drought.py", "--random", str(os.getpid())],
+        stdout=None,
+        stderr=None,
+    )
 
     # 4) listener MQ runtime (display -> env)
     inbox = queue.Queue()
@@ -655,6 +668,12 @@ def main():
         print("[env] shutting down (Ctrl+C)")
     finally:
         # cleanup
+        if drought_proc is not None:
+            try:
+                drought_proc.terminate()
+                drought_proc.wait(timeout=2)
+            except Exception:
+                pass
         for p in procs:
             try:
                 p.terminate()

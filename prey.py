@@ -20,6 +20,7 @@ REPRO_COST = 8          # coût d'énergie d'une reproduction
 
 def main():
     print("[prey] starting")
+    cmd_tag = "prey"
 
     energy = ENERGY_START
     tick = 0
@@ -84,7 +85,7 @@ def main():
                 hunger_ratio = max(0.0, min(1.0, hunger_ratio)) #gérer le cas où energy > HUNGER_THRESHOLD
                 eat_prob = hunger_ratio ** 1.25 #faim non linéaire 
                 if st[utils.GRASS] > 0 and random.random() < eat_prob:
-                    resp = utils.send_cmd_persistent(s, buffer, f"EAT_GRASS")
+                    resp = utils.send_cmd_persistent(s, buffer, f"EAT_GRASS {cmd_tag}")
                     if resp == "OK":
                         energy += EAT_GAIN
                         print(f"[prey] ate grass (+{EAT_GAIN}) -> energy={energy}")
