@@ -74,7 +74,7 @@ def main():
             # mort : prévenir env + quitter
             if energy < 0:
                 try:
-                    resp = utils.send_cmd_persistent(s, buffer, f"DIE pred")
+                    resp = utils.send_cmd_persistent(s, buffer, "DIE predator")
                 except Exception as e:
                     print(f"[pred] DIE failed (env?) -> {e}")
                 break
@@ -83,7 +83,7 @@ def main():
             if energy < HUNGER_THRESHOLD:
                 hunger_ratio = (HUNGER_THRESHOLD - energy) / HUNGER_THRESHOLD #plus l'énergie baisse plus l'individu à faim
                 hunger_ratio = max(0.0, min(1.0, hunger_ratio)) #gérer le cas où energy > HUNGER_THRESHOLD
-                eat_prob = hunger_ratio ** 1.5 #faim non linéaire 
+                eat_prob = hunger_ratio ** 1.4 #faim non linéaire 
                 if st[utils.PREY] > 0 and random.random() < eat_prob: 
                     energy -= HUNT_COST #coût de chasse
                     resp = utils.send_cmd_persistent(s, buffer, f"EAT_PREY {cmd_tag}")

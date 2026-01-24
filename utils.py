@@ -22,9 +22,9 @@ def recv_line(sock: socket.socket, buffer: bytearray) -> str | None:
     """
     while True:
         if b"\n" in buffer:
-            line, _, rest = buffer.partition(b"\n")
+            line, _, rest = buffer.partition(b"\n") #découpe en : avant /n après
             buffer[:] = rest
-            return line.decode(errors="replace").strip()
+            return line.decode(errors="replace").strip() #nettoyage 
 
         chunk = sock.recv(1024)
         if not chunk:
@@ -76,14 +76,27 @@ def attach_world(retries: int = 50, delay: float = 0.1):
     last_err: Exception | None = None
     for _ in range(retries):
         try:
+            # 1) Attacher le semaphore du monde pour la synchro.
             mutex = sysv_ipc.Semaphore(SEMA_KEY)
+            # 2) Attacher la memoire partagee deja creee par env.
             shared_mem = shared_memory.SharedMemory(name=SHM_NAME, create=False)
             try:
-                resource_tracker.unregister(shared_mem._name, "shared_memory")
+                # 3) Eviter que multiprocessing "resource_tracker" supprime la SHM
+                # a la fin du process client. On desenregistre localement.
+                name_for_tracker = shared_mem._name
+                tracker = getattr(resource_tracker, "_resource_tracker", None)
+                cache = getattr(tracker, "_cache", None)
+                if isinstance(cache, dict):
+                    shm_cache = cache.get("shared_memory")
+                    if shm_cache is not None and name_for_tracker not in shm_cache and shared_mem.name in shm_cache:
+                        name_for_tracker = shared_mem.name
+                resource_tracker.unregister(name_for_tracker, "shared_memory")
             except Exception:
+                # Si le tracker n'existe pas ou change, on ignore et on continue.
                 pass
             return shared_mem, mutex
         except Exception as e:
+            # Retry: env peut ne pas avoir encore cree la SHM ou le semaphore.
             last_err = e
             time.sleep(delay)
     raise RuntimeError(f"Unable to attach world SHM: {last_err}")

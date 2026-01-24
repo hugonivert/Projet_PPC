@@ -1,12 +1,3 @@
-# display_gui.py
-#
-# GUI display/controller for the simulation.
-# - Set initial populations and start the simulation (INIT)
-# - Show live counts + drought status
-# - Trigger drought manually
-#
-# Requires sysv_ipc (Linux/WSL).
-
 import queue
 import threading
 import tkinter as tk
@@ -27,6 +18,7 @@ TYPE_EVT = 2   # env -> display
 
 class DisplayGUI:
     def __init__(self, root: tk.Tk) -> None:
+        """Initialise l'interface, l'IPC et les tâches périodiques."""
         self.root = root
         self.root.title("Circle of Life - Display")
 
@@ -38,7 +30,8 @@ class DisplayGUI:
         }
         self.started = False
         self.env_proc = None
-
+        
+        # cleanup pour s'assurer que tout est bien clean même si erreur à la fin du précédant lancement
         cleanup.cleanup_ipc("WORLD", 0x1234, MQ_KEY, remove_mq=True)
         self.mq = sysv_ipc.MessageQueue(MQ_KEY, sysv_ipc.IPC_CREAT)
         self.inbox = queue.Queue()
@@ -50,6 +43,7 @@ class DisplayGUI:
         self.root.after(1000, self.request_status)
 
     def _build_ui(self) -> None:
+        """Construit et place les widgets Tkinter."""
         main = ttk.Frame(self.root, padding=12)
         main.grid(row=0, column=0, sticky="nsew")
 
@@ -98,6 +92,7 @@ class DisplayGUI:
         main.rowconfigure(13, weight=1)
 
     def mq_listener(self) -> None:
+        """Boucle en arrière-plan qui reçoit les événements de la MQ."""
         while True:
             try:
                 msg, _ = self.mq.receive(type=TYPE_EVT)
@@ -109,6 +104,7 @@ class DisplayGUI:
                 pass
 
     def process_inbox(self) -> None:
+        """Traite les événements en file et reprogramme le prochain poll."""
         while True:
             try:
                 text = self.inbox.get_nowait()
@@ -119,6 +115,7 @@ class DisplayGUI:
         self.root.after(100, self.process_inbox)
 
     def request_status(self) -> None:
+        """Demande périodiquement l'état à env."""
         if self.started:
             try:
                 self.send_cmd("STATUS")
@@ -127,9 +124,11 @@ class DisplayGUI:
         self.root.after(1000, self.request_status)
 
     def send_cmd(self, cmd: str) -> None:
+        """Envoie une commande à env via la MQ."""
         self.mq.send(cmd.encode("utf-8"), type=TYPE_CMD)
 
     def on_init(self) -> None:
+        """Valide les entrées, démarre env si besoin, et envoie INIT."""
         try:
             predators = int(self.pred_var.get())
             preys = int(self.prey_var.get())
@@ -168,12 +167,14 @@ class DisplayGUI:
         self.stop_btn.config(state="normal")
 
     def on_toggle_drought(self) -> None:
+        """Bascule l'état de sécheresse via une commande env."""
         if not self.started:
             return
         desired = 0 if self.state["drought"] else 1
         self.send_cmd(f"SET DROUGHT {desired}")
 
     def refresh_labels(self) -> None:
+        """Rafraîchit les labels à partir de l'état courant."""
         self.pred_lbl.config(text=f"Predators (effective): {self.state['predators']}")
         self.prey_lbl.config(text=f"Preys (effective): {self.state['preys']}")
         self.grass_lbl.config(text=f"Grass: {self.state['grass']}")
@@ -181,6 +182,7 @@ class DisplayGUI:
 
     @staticmethod
     def is_port_in_use(host: str, port: int) -> bool:
+        """Retourne True si un port TCP est déjà utilisé."""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(0.2)
@@ -189,14 +191,16 @@ class DisplayGUI:
             return False
 
     def log_event(self, text: str) -> None:
+        """Ajoute une ligne au journal d'événements."""
         self.log.config(state="normal")
         self.log.insert("end", text + "\n")
         self.log.see("end")
         self.log.config(state="disabled")
 
     def handle_message(self, text: str) -> None:
+        """Traite un message d'événement venant de env."""
         if text.startswith("STATE "):
-            parts = text.split()
+            parts = text.split() #redécoupage du message
             data = {}
             for item in parts[1:]:
                 if "=" in item:
@@ -263,6 +267,7 @@ class DisplayGUI:
         self.refresh_labels()
 
     def on_stop(self) -> None:
+        """Arrête la simulation et tente de terminer env."""
         if not self.started:
             return
         try:
@@ -289,6 +294,7 @@ class DisplayGUI:
         self.stop_btn.config(state="disabled")
 
     def on_close(self) -> None:
+        """Gère la fermeture en stoppant puis détruisant l'UI."""
         try:
             self.on_stop()
         finally:
@@ -296,6 +302,7 @@ class DisplayGUI:
 
 
 def main() -> None:
+    """Point d'entrée du programme pour l'interface d'affichage."""
     root = tk.Tk()
     DisplayGUI(root)
     root.mainloop()

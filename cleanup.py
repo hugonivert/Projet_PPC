@@ -4,6 +4,7 @@ import sysv_ipc
 
 
 def cleanup_ipc(shm_name: str, sema_key: int, mq_key: int, remove_mq: bool = True) -> None:
+    """Supprime la SHM, le sémaphore et éventuellement la MQ obsolètes."""
     try:
         old = shared_memory.SharedMemory(name=shm_name, create=False)
         old.close()
